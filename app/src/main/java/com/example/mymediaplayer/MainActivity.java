@@ -382,6 +382,71 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    // Adapter: library rows with Add to Queue and Add to Playlist buttons
+    private class LibraryAdapter extends ArrayAdapter<MediaItem> {
+        public LibraryAdapter(android.content.Context ctx, List<MediaItem> items) {
+            super(ctx, 0, items);
+        }
+
+        @Override
+        public View getView(int position, View convertView, android.view.ViewGroup parent) {
+            View v = convertView;
+            if (v == null) {
+                v = getLayoutInflater().inflate(R.layout.item_library, parent, false);
+            }
+            MediaItem item = getItem(position);
+            TextView title = v.findViewById(R.id.item_title);
+            android.widget.ImageButton btnAddQueue = v.findViewById(R.id.btn_add_queue);
+            android.widget.ImageButton btnAddPlaylist = v.findViewById(R.id.btn_add_playlist);
+
+            title.setText(item == null ? "" : item.title + (item.artist != null && !item.artist.isEmpty() ? " — " + item.artist : ""));
+
+            btnAddQueue.setOnClickListener(view -> {
+                if (item != null) {
+                    playQueue.add(item);
+                    Toast.makeText(MainActivity.this, getString(R.string.added_to, getString(R.string.queue)), Toast.LENGTH_SHORT).show();
+                }
+            });
+
+            btnAddPlaylist.setOnClickListener(view -> {
+                if (item != null) showAddToPlaylistDialog(item);
+            });
+
+            return v;
+        }
+    }
+
+    // Adapter: rows with remove icon, backed by a mutable list
+    private class RemoveAdapter extends ArrayAdapter<MediaItem> {
+        private final List<MediaItem> items;
+        public RemoveAdapter(android.content.Context ctx, List<MediaItem> items) {
+            super(ctx, 0, items);
+            this.items = items;
+        }
+
+        @Override
+        public View getView(int position, View convertView, android.view.ViewGroup parent) {
+            View v = convertView;
+            if (v == null) {
+                v = getLayoutInflater().inflate(R.layout.item_with_remove, parent, false);
+            }
+            MediaItem item = getItem(position);
+            TextView title = v.findViewById(R.id.item_title);
+            android.widget.ImageButton btnRemove = v.findViewById(R.id.btn_remove);
+
+            title.setText(item == null ? "" : item.title + (item.artist != null && !item.artist.isEmpty() ? " — " + item.artist : ""));
+
+            btnRemove.setOnClickListener(view -> {
+                if (position >= 0 && position < items.size()) {
+                    items.remove(position);
+                    notifyDataSetChanged();
+                }
+            });
+
+            return v;
+        }
+    }
+
     // Load device media into `library` on background thread
     private void loadLibraryFromMediaStore() {
         new Thread(() -> {
@@ -432,6 +497,7 @@ public class MainActivity extends AppCompatActivity {
 
     // Open a dialog that shows library with search + sort + item actions
     private void openLibraryDialog() {
+        // Inflate dialog layout
         View dlgView = getLayoutInflater().inflate(R.layout.dialog_media_library, null);
         android.widget.SearchView searchView = dlgView.findViewById(R.id.dialog_search);
         Spinner sortSpinner = dlgView.findViewById(R.id.dialog_sort_spinner);
@@ -439,7 +505,8 @@ public class MainActivity extends AppCompatActivity {
         Button btnQueue = dlgView.findViewById(R.id.btn_show_queue);
         Button btnPlaylists = dlgView.findViewById(R.id.btn_manage_playlists);
 
-        ArrayAdapter<MediaItem> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, filteredLibrary);
+        // Adapter for list view showing title — artist with action buttons
+        LibraryAdapter adapter = new LibraryAdapter(this, filteredLibrary);
         listView.setAdapter(adapter);
 
         // Sort options
@@ -479,36 +546,14 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // Item click -> play
+        // Item click -> play (tap the row to play)
         listView.setOnItemClickListener((parent, view, position, id) -> {
             MediaItem item = filteredLibrary.get(position);
             if (item != null) {
                 prepareMediaPlayer(item.contentUri);
                 if (mediaPlayer != null) mediaPlayer.start();
-                // add to queue
-                playQueue.add(item);
                 Toast.makeText(this, getString(R.string.playing_prefix) + item.title, Toast.LENGTH_SHORT).show();
             }
-        });
-
-        // Item long click -> actions (add to queue / add to playlist)
-        listView.setOnItemLongClickListener((parent, view, position, id) -> {
-            MediaItem item = filteredLibrary.get(position);
-            PopupMenu pm = new PopupMenu(this, view);
-            pm.getMenu().add(getString(R.string.add_to_queue));
-            pm.getMenu().add(getString(R.string.add_to_playlist));
-            pm.setOnMenuItemClickListener(menuItem -> {
-                String t = String.valueOf(menuItem.getTitle());
-                if (t.equals(getString(R.string.add_to_queue))) {
-                    playQueue.add(item);
-                    Toast.makeText(this, getString(R.string.added_to, getString(R.string.queue)), Toast.LENGTH_SHORT).show();
-                } else if (t.equals(getString(R.string.add_to_playlist))) {
-                    showAddToPlaylistDialog(item);
-                }
-                return true;
-            });
-            pm.show();
-            return true;
         });
 
         // show queue
@@ -538,23 +583,15 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         }
+        // adapter may be LibraryAdapter or RemoveAdapter which both extend ArrayAdapter
         adapter.notifyDataSetChanged();
     }
 
     // Show play queue with ability to remove items
     private void showQueueDialog() {
-        List<String> titles = new ArrayList<>();
-        for (MediaItem m : playQueue) titles.add(m.title + (m.artist != null ? " — " + m.artist : ""));
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, titles);
+        RemoveAdapter adapter = new RemoveAdapter(this, playQueue);
         ListView lv = new ListView(this);
         lv.setAdapter(adapter);
-        lv.setOnItemLongClickListener((parent, view, position, id) -> {
-            // remove on long press
-            playQueue.remove(position);
-            titles.remove(position);
-            adapter.notifyDataSetChanged();
-            return true;
-        });
 
         new AlertDialog.Builder(this)
                 .setTitle(getString(R.string.play_queue_title))
@@ -601,22 +638,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showPlaylistDetailDialog(String name, List<MediaItem> items) {
-        // Ensure we use a final reference for lambdas
         final List<MediaItem> playlistItems = (items == null) ? new ArrayList<>() : items;
-        List<String> titles = new ArrayList<>();
-        for (MediaItem m : playlistItems) titles.add(m.title + (m.artist != null ? " — " + m.artist : ""));
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, titles);
+        RemoveAdapter adapter = new RemoveAdapter(this, playlistItems);
         ListView lv = new ListView(this);
         lv.setAdapter(adapter);
-        lv.setOnItemLongClickListener((parent, view, position, id) -> {
-            // remove from playlist (operates on the final playlistItems list)
-            if (position >= 0 && position < playlistItems.size()) {
-                playlistItems.remove(position);
-                titles.remove(position);
-                adapter.notifyDataSetChanged();
-            }
-            return true;
-        });
 
         new AlertDialog.Builder(this)
                 .setTitle(name + " (" + getString(R.string.long_press_remove) + ")")

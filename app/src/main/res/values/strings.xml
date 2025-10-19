@@ -24,6 +24,23 @@
     <string name="playlist_created">Playlist created</string>
     <string name="unable_to_open_picker">Unable to open picker</string>
     <string name="playing_prefix">Playing: </string>
-    <string name="play_queue_title">Play Queue (long-press to remove)</string>
+    <string name="play_queue_title">Play Queue </string>
     <string name="long_press_remove">long-press to remove</string>
+
+    <!-- New strings for playlist management -->
+    <string name="open">Open</string>
+    <string name="rename_playlist">Rename playlist</string>
+    <string name="delete_playlist">Delete playlist</string>
+    <string name="rename">Rename</string>
+    <string name="delete">Delete</string>
+    <string name="cancel">Cancel</string>
+    <string name="playlist_exists">A playlist with that name already exists</string>
+    <string name="playlist_renamed">Playlist renamed</string>
+    <string name="playlist_deleted">Playlist deleted</string>
+    <string name="confirm_delete_playlist">Delete "%1$s"? This cannot be undone.</string>
+
+    <!-- New strings for playing a whole playlist -->
+    <string name="play_whole_playlist">Play whole playlist</string>
+    <string name="playlist_empty">Playlist is empty</string>
+    <string name="playing_playlist">Playing playlist: %1$s</string>
 </resources>

@@ -38,6 +38,7 @@ import java.util.Map;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
@@ -84,11 +85,14 @@ public class MainActivity extends AppCompatActivity {
     private ActivityResultLauncher<Intent> audioPickerLauncher;
     private ActivityResultLauncher<String[]> permissionLauncher;
 
-    // New: in-memory library, filtered view, queue and playlists
     private final List<MediaItem> library = new ArrayList<>();
     private final List<MediaItem> filteredLibrary = new ArrayList<>();
     private final List<MediaItem> playQueue = new ArrayList<>();
     private final Map<String, List<MediaItem>> playlists = new HashMap<>();
+
+    // Queue playback state
+    private boolean playingFromQueue = false;
+    private int queueIndex = -1;
 
     // Debounce handler for search
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
@@ -162,7 +166,6 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // Attempt to load a bundled raw resource named "sample_audio" if present
         int resId = getResources().getIdentifier("sample_audio", "raw", getPackageName());
         if (resId != 0) {
             prepareMediaPlayer(resId);
@@ -248,7 +251,6 @@ public class MainActivity extends AppCompatActivity {
         if (speedButton != null) {
             speedButton.setOnClickListener(v -> {
                 if (mediaPlayer == null) return;
-                // minSdk is >= 26 for this project, so PlaybackParams is available; handle device exceptions
                 speedIndex = (speedIndex + 1) % speeds.length;
                 float nextSpeed = speeds[speedIndex];
                 try {
@@ -316,10 +318,40 @@ public class MainActivity extends AppCompatActivity {
         handler.post(updateProgress);
 
         mediaPlayer.setOnCompletionListener(mp -> {
+            // If we're playing from queue, advance automatically
+            if (playingFromQueue && queueIndex >= 0 && queueIndex + 1 < playQueue.size()) {
+                queueIndex++;
+                MediaItem next = playQueue.get(queueIndex);
+                if (next != null) {
+                    prepareMediaPlayer(next.contentUri);
+                    if (mediaPlayer != null) mediaPlayer.start();
+                    if (titleText != null) titleText.setText(next.title);
+                    return;
+                }
+            }
+            // End of single track or queue; reset UI
             if (playPauseButton != null) playPauseButton.setImageResource(android.R.drawable.ic_media_play);
             if (seekBar != null) seekBar.setProgress(0);
             handler.removeCallbacks(updateProgress);
+            playingFromQueue = false;
+            queueIndex = -1;
         });
+    }
+
+    // Start playing the provided list as a queue from the beginning
+    private void startQueuePlayback(@NonNull List<MediaItem> list, @NonNull String playlistName) {
+        if (list.isEmpty()) {
+            Toast.makeText(this, getString(R.string.playlist_empty), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        playQueue.clear();
+        playQueue.addAll(list);
+        queueIndex = 0;
+        playingFromQueue = true;
+        MediaItem first = playQueue.get(0);
+        prepareMediaPlayer(first.contentUri);
+        if (mediaPlayer != null) mediaPlayer.start();
+        Toast.makeText(this, getString(R.string.playing_playlist, playlistName), Toast.LENGTH_SHORT).show();
     }
 
     private void setControlsEnabled(boolean enabled) {
@@ -388,8 +420,9 @@ public class MainActivity extends AppCompatActivity {
             super(ctx, 0, items);
         }
 
+        @NonNull
         @Override
-        public View getView(int position, View convertView, android.view.ViewGroup parent) {
+        public View getView(int position, @Nullable View convertView, @NonNull android.view.ViewGroup parent) {
             View v = convertView;
             if (v == null) {
                 v = getLayoutInflater().inflate(R.layout.item_library, parent, false);
@@ -432,8 +465,9 @@ public class MainActivity extends AppCompatActivity {
             this.items = items;
         }
 
+        @NonNull
         @Override
-        public View getView(int position, View convertView, android.view.ViewGroup parent) {
+        public View getView(int position, @Nullable View convertView, @NonNull android.view.ViewGroup parent) {
             View v = convertView;
             if (v == null) {
                 v = getLayoutInflater().inflate(R.layout.item_with_remove, parent, false);
@@ -505,7 +539,6 @@ public class MainActivity extends AppCompatActivity {
 
     // Open a dialog that shows library with search + sort + item actions
     private void openLibraryDialog() {
-        // Inflate dialog layout
         View dlgView = getLayoutInflater().inflate(R.layout.dialog_media_library, null);
         android.widget.SearchView searchView = dlgView.findViewById(R.id.dialog_search);
         Spinner sortSpinner = dlgView.findViewById(R.id.dialog_sort_spinner);
@@ -554,7 +587,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // Item click -> play (tap the row to play)
+        // Item click -> play
         listView.setOnItemClickListener((parent, view, position, id) -> {
             MediaItem item = filteredLibrary.get(position);
             if (item != null) {
@@ -591,7 +624,6 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         }
-        // adapter may be LibraryAdapter or RemoveAdapter which both extend ArrayAdapter
         adapter.notifyDataSetChanged();
     }
 
@@ -615,11 +647,66 @@ public class MainActivity extends AppCompatActivity {
         ListView lv = new ListView(this);
         lv.setAdapter(adapter);
 
+        // actions: Play, Open, Rename, Delete
         lv.setOnItemClickListener((parent, view, position, id) -> {
-            String name = names.get(position);
-            List<MediaItem> items = playlists.get(name);
-            if (items == null) items = new ArrayList<>();
-            showPlaylistDetailDialog(name, items);
+            String selectedName = names.get(position);
+            String[] options = new String[]{
+                    getString(R.string.play_whole_playlist),
+                    getString(R.string.open),
+                    getString(R.string.rename_playlist),
+                    getString(R.string.delete_playlist)
+            };
+            new AlertDialog.Builder(this)
+                    .setTitle(selectedName)
+                    .setItems(options, (dialog, which) -> {
+                        if (which == 0) {
+                            // Play whole
+                            List<MediaItem> items = playlists.get(selectedName);
+                            if (items == null) items = new ArrayList<>();
+                            startQueuePlayback(items, selectedName);
+                        } else if (which == 1) {
+                            // Open
+                            List<MediaItem> items = playlists.get(selectedName);
+                            if (items == null) items = new ArrayList<>();
+                            showPlaylistDetailDialog(selectedName, items);
+                        } else if (which == 2) {
+                            // Rename
+                            final EditText input = new EditText(this);
+                            input.setText(selectedName);
+                            new AlertDialog.Builder(this)
+                                    .setTitle(getString(R.string.rename_playlist))
+                                    .setView(input)
+                                    .setPositiveButton(getString(R.string.rename), (d, w) -> {
+                                        String newName = input.getText().toString().trim();
+                                        if (newName.isEmpty()) return;
+                                        if (playlists.containsKey(newName)) {
+                                            Toast.makeText(this, getString(R.string.playlist_exists), Toast.LENGTH_SHORT).show();
+                                            return;
+                                        }
+                                        List<MediaItem> moved = playlists.remove(selectedName);
+                                        playlists.put(newName, moved == null ? new ArrayList<>() : moved);
+                                        names.set(position, newName);
+                                        adapter.notifyDataSetChanged();
+                                        Toast.makeText(this, getString(R.string.playlist_renamed), Toast.LENGTH_SHORT).show();
+                                    })
+                                    .setNegativeButton(getString(R.string.cancel), null)
+                                    .show();
+                        } else if (which == 3) {
+                            // Delete
+                            new AlertDialog.Builder(this)
+                                    .setTitle(getString(R.string.delete_playlist))
+                                    .setMessage(getString(R.string.confirm_delete_playlist, selectedName))
+                                    .setPositiveButton(getString(R.string.delete), (d, w) -> {
+                                        playlists.remove(selectedName);
+                                        names.remove(position);
+                                        adapter.notifyDataSetChanged();
+                                        Toast.makeText(this, getString(R.string.playlist_deleted), Toast.LENGTH_SHORT).show();
+                                    })
+                                    .setNegativeButton(getString(R.string.cancel), null)
+                                    .show();
+                        }
+                    })
+                    .show();
         });
 
         new AlertDialog.Builder(this)
@@ -635,7 +722,12 @@ public class MainActivity extends AppCompatActivity {
                                 String name = input.getText().toString().trim();
                                 if (!name.isEmpty() && !playlists.containsKey(name)) {
                                     playlists.put(name, new ArrayList<>());
+                                    // update list immediately
+                                    names.add(name);
+                                    adapter.notifyDataSetChanged();
                                     Toast.makeText(this, getString(R.string.playlist_created), Toast.LENGTH_SHORT).show();
+                                } else if (playlists.containsKey(name)) {
+                                    Toast.makeText(this, getString(R.string.playlist_exists), Toast.LENGTH_SHORT).show();
                                 }
                             })
                             .setNegativeButton(getString(R.string.close), null)
@@ -651,58 +743,28 @@ public class MainActivity extends AppCompatActivity {
         ListView lv = new ListView(this);
         lv.setAdapter(adapter);
 
+        //  Play track on item click
+        lv.setOnItemClickListener((parent, view, position, id) -> {
+            if (position >= 0 && position < playlistItems.size()) {
+                MediaItem m = playlistItems.get(position);
+                if (m != null) {
+                    playingFromQueue = false;
+                    queueIndex = -1;
+                    prepareMediaPlayer(m.contentUri);
+                    if (mediaPlayer != null) mediaPlayer.start();
+                    Toast.makeText(this, getString(R.string.playing_prefix) + m.title, Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+
         new AlertDialog.Builder(this)
-                .setTitle(name + " (" + getString(R.string.long_press_remove) + ")")
+                .setTitle(name)
                 .setView(lv)
                 .setPositiveButton(getString(R.string.close), null)
                 .show();
     }
 
-    private void showAddToPlaylistDialog(MediaItem item) {
-        // show existing playlists or option to create new
-        List<String> names = new ArrayList<>(playlists.keySet());
-        names.add(0, getString(R.string.create_new_playlist_option));
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, names);
-        ListView lv = new ListView(this);
-        lv.setAdapter(adapter);
-
-        AlertDialog dlg = new AlertDialog.Builder(this)
-                .setTitle(getString(R.string.add_to_playlist))
-                .setView(lv)
-                .setNegativeButton(getString(R.string.close), null)
-                .create();
-
-        lv.setOnItemClickListener((parent, view, position, id) -> {
-            String sel = names.get(position);
-            if (position == 0) {
-                // create new
-                EditText input = new EditText(this);
-                new AlertDialog.Builder(this)
-                        .setTitle(getString(R.string.create_playlist_name))
-                        .setView(input)
-                        .setPositiveButton(getString(R.string.create_playlist), (d, w) -> {
-                            String name = input.getText().toString().trim();
-                            if (!name.isEmpty()) {
-                                playlists.putIfAbsent(name, new ArrayList<>());
-                                List<MediaItem> list = playlists.get(name);
-                                if (list != null) list.add(item);
-                                Toast.makeText(this, getString(R.string.added_to, name), Toast.LENGTH_SHORT).show();
-                            }
-                        })
-                        .setNegativeButton(getString(R.string.close), null)
-                        .show();
-            } else {
-                playlists.putIfAbsent(sel, new ArrayList<>());
-                List<MediaItem> list = playlists.get(sel);
-                if (list != null) list.add(item);
-                Toast.makeText(this, getString(R.string.added_to, sel), Toast.LENGTH_SHORT).show();
-            }
-            dlg.dismiss();
-        });
-
-        dlg.show();
-    }
-
+    // Ask for READ permission if needed
     private void checkPermissionAndOpenLibrary() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             String perm = android.Manifest.permission.READ_MEDIA_AUDIO;
@@ -721,5 +783,50 @@ public class MainActivity extends AppCompatActivity {
                 permissionLauncher.launch(new String[]{perm});
             }
         }
+    }
+
+    // Let user pick an existing playlist or create one, then add the item
+    private void showAddToPlaylistDialog(MediaItem item) {
+        List<String> names = new ArrayList<>(playlists.keySet());
+        names.add(0, getString(R.string.create_new_playlist_option));
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, names);
+        ListView lv = new ListView(this);
+        lv.setAdapter(adapter);
+
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.add_to_playlist))
+                .setView(lv)
+                .setNegativeButton(getString(R.string.close), null)
+                .create();
+
+        lv.setOnItemClickListener((parent, view, position, id) -> {
+            if (position == 0) {
+                // create new
+                EditText input = new EditText(this);
+                new AlertDialog.Builder(this)
+                        .setTitle(getString(R.string.create_playlist_name))
+                        .setView(input)
+                        .setPositiveButton(getString(R.string.create_playlist), (d, w) -> {
+                            String name = input.getText().toString().trim();
+                            if (!name.isEmpty()) {
+                                playlists.putIfAbsent(name, new ArrayList<>());
+                                List<MediaItem> list = playlists.get(name);
+                                if (list != null) list.add(item);
+                                Toast.makeText(this, getString(R.string.added_to, name), Toast.LENGTH_SHORT).show();
+                            }
+                        })
+                        .setNegativeButton(getString(R.string.close), null)
+                        .show();
+            } else {
+                String sel = names.get(position);
+                playlists.putIfAbsent(sel, new ArrayList<>());
+                List<MediaItem> list = playlists.get(sel);
+                if (list != null) list.add(item);
+                Toast.makeText(this, getString(R.string.added_to, sel), Toast.LENGTH_SHORT).show();
+            }
+            dlg.dismiss();
+        });
+
+        dlg.show();
     }
 }

@@ -1,19 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:padding="16dp"
     tools:context=".MainActivity">
 
-    <!-- Album / Title -->
+    <!-- Title / Track Name -->
     <TextView
         android:id="@+id/title_text"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:text="@string/sample_track"
-        android:textSize="18sp"
+        android:textSize="20sp"
         android:textStyle="bold"
         android:gravity="center"
         app:layout_constraintTop_toTopOf="parent"
@@ -21,7 +23,7 @@
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginTop="24dp" />
 
-    <!-- Current time -->
+    <!-- Current Time -->
     <TextView
         android:id="@+id/current_time"
         android:layout_width="wrap_content"
@@ -29,105 +31,120 @@
         android:text="@string/time_placeholder"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/title_text"
-        android:layout_marginStart="16dp"
-        android:layout_marginTop="16dp" />
+        android:layout_marginTop="24dp" />
 
-    <!-- Total time -->
+    <!-- Total Time -->
     <TextView
         android:id="@+id/total_time"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="@string/time_placeholder"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/title_text"
-        android:layout_marginEnd="16dp"
-        android:layout_marginTop="16dp" />
+        app:layout_constraintBaseline_toBaselineOf="@id/current_time" />
 
-    <!-- Seek bar -->
+    <!-- Seek Bar -->
     <SeekBar
         android:id="@+id/seek_bar"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toBottomOf="@id/current_time"
-        android:layout_marginStart="16dp"
-        android:layout_marginEnd="16dp"
-        android:layout_marginTop="8dp" />
-
-    <!-- Playback controls row -->
-    <ImageButton
-        android:id="@+id/skip_backward"
-        android:layout_width="56dp"
-        android:layout_height="56dp"
-        android:src="@android:drawable/ic_media_rew"
-        android:contentDescription="@string/skip_backward"
-        android:background="?attr/selectableItemBackgroundBorderless"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/seek_bar"
-        android:layout_marginStart="24dp"
-        android:layout_marginTop="16dp" />
-
-    <ImageButton
-        android:id="@+id/play_pause"
-        android:layout_width="72dp"
-        android:layout_height="72dp"
-        android:src="@android:drawable/ic_media_play"
-        android:contentDescription="@string/play_pause"
-        android:background="?attr/selectableItemBackgroundBorderless"
-        app:layout_constraintStart_toEndOf="@id/skip_backward"
-        app:layout_constraintTop_toTopOf="@id/skip_backward"
-        app:layout_constraintEnd_toStartOf="@id/skip_forward"
-        app:layout_constraintHorizontal_bias="0.5"
-        android:layout_marginStart="16dp"
-        android:layout_marginEnd="16dp" />
-
-    <ImageButton
-        android:id="@+id/skip_forward"
-        android:layout_width="56dp"
-        android:layout_height="56dp"
-        android:src="@android:drawable/ic_media_ff"
-        android:contentDescription="@string/skip_forward"
-        android:background="?attr/selectableItemBackgroundBorderless"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="@id/skip_backward"
-        android:layout_marginEnd="24dp" />
+        android:layout_marginTop="12dp" />
 
-    <!-- Volume and mute -->
-
-    <SeekBar
-        android:id="@+id/volume_seek_bar"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="16dp"
-        android:layout_marginTop="20dp"
-        android:layout_marginEnd="8dp"
-        android:max="15"
-        app:layout_constraintEnd_toStartOf="@+id/mute_button"
-        app:layout_constraintHorizontal_bias="0.0"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/skip_backward" />
-
-    <ImageButton
-        android:id="@+id/mute_button"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:src="@android:drawable/ic_lock_silent_mode_off"
-        android:contentDescription="@string/mute"
-        android:background="?attr/selectableItemBackgroundBorderless"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="@id/volume_seek_bar"
-        android:layout_marginEnd="16dp" />
-
-    <!-- Playback speed -->
-    <Button
-        android:id="@+id/speed_button"
+    <!-- Playback Controls -->
+    <LinearLayout
+        android:id="@+id/playback_controls"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="28dp"
-        android:layout_marginEnd="240dp"
-        android:text="playback_speed"
+        android:orientation="horizontal"
+        android:gravity="center"
+        app:layout_constraintTop_toBottomOf="@id/seek_bar"
+        app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/volume_seek_bar" />
+        android:layout_marginTop="24dp">
+
+        <ImageButton
+            android:id="@+id/skip_backward"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:src="@android:drawable/ic_media_rew"
+            android:contentDescription="@string/skip_backward"
+            android:background="?attr/selectableItemBackgroundBorderless" />
+
+        <ImageButton
+            android:id="@+id/play_pause"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:src="@android:drawable/ic_media_play"
+            android:contentDescription="@string/play_pause"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp" />
+
+        <ImageButton
+            android:id="@+id/skip_forward"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:src="@android:drawable/ic_media_ff"
+            android:contentDescription="@string/skip_forward"
+            android:background="?attr/selectableItemBackgroundBorderless" />
+    </LinearLayout>
+
+    <!-- Volume Controls -->
+    <LinearLayout
+        android:id="@+id/volume_section"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        app:layout_constraintTop_toBottomOf="@id/playback_controls"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="24dp">
+
+        <SeekBar
+            android:id="@+id/volume_seek_bar"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:max="15" />
+
+        <ImageButton
+            android:id="@+id/mute_button"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:tint="@android:color/black"
+            android:src="@android:drawable/ic_lock_silent_mode_off"
+            android:contentDescription="@string/mute"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_marginStart="8dp" />
+    </LinearLayout>
+
+    <!--  Library & Speed -->
+    <LinearLayout
+        android:id="@+id/bottom_buttons"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        app:layout_constraintTop_toBottomOf="@id/volume_section"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="28dp">
+
+        <Button
+            android:id="@+id/library_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/library" />
+
+        <Button
+            android:id="@+id/speed_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/playback_speed_default"
+            android:layout_marginStart="24dp" />
+    </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

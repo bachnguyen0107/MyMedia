@@ -1,6 +1,9 @@
 package com.example.mymediaplayer;
 
+import android.annotation.SuppressLint;
+import android.content.ContentUris;
 import android.content.Intent;
+import android.database.Cursor;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.PlaybackParams;
@@ -9,18 +12,33 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.ListView;
+import android.widget.PopupMenu;
 import android.widget.SeekBar;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.util.Locale;
+import androidx.core.content.ContextCompat;
 
-import androidx.activity.EdgeToEdge;
+import java.text.Collator;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -46,7 +64,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean isMuted = false;
     private int previousVolume = 0;
 
-    private float[] speeds = new float[]{1f, 1.5f, 0.75f};
+    private final float[] speeds = new float[]{1f, 1.5f, 0.75f};
     private int speedIndex = 0;
 
     private final Runnable updateProgress = new Runnable() {
@@ -64,12 +82,37 @@ public class MainActivity extends AppCompatActivity {
     };
 
     private ActivityResultLauncher<Intent> audioPickerLauncher;
+    private ActivityResultLauncher<String[]> permissionLauncher;
 
+    // New: in-memory library, filtered view, queue and playlists
+    private final List<MediaItem> library = new ArrayList<>();
+    private final List<MediaItem> filteredLibrary = new ArrayList<>();
+    private final List<MediaItem> playQueue = new ArrayList<>();
+    private final Map<String, List<MediaItem>> playlists = new HashMap<>();
+
+    // Debounce handler for search
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingSearch;
+
+    @SuppressLint("DiscouragedApi")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
+
+        // register permission launcher
+        permissionLauncher = registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
+            boolean granted = false;
+            for (Map.Entry<String, Boolean> e : result.entrySet()) {
+                if (Boolean.TRUE.equals(e.getValue())) { granted = true; break; }
+            }
+            if (granted) {
+                loadLibraryFromMediaStore();
+                openLibraryDialog();
+            } else {
+                Toast.makeText(this, "Permission required to load media library", Toast.LENGTH_SHORT).show();
+            }
+        });
 
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -205,21 +248,24 @@ public class MainActivity extends AppCompatActivity {
         if (speedButton != null) {
             speedButton.setOnClickListener(v -> {
                 if (mediaPlayer == null) return;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    speedIndex = (speedIndex + 1) % speeds.length;
-                    float nextSpeed = speeds[speedIndex];
-                    try {
-                        PlaybackParams params = mediaPlayer.getPlaybackParams();
-                        params.setSpeed(nextSpeed);
-                        mediaPlayer.setPlaybackParams(params);
-                        speedButton.setText(String.format(Locale.US, "%.2fx", nextSpeed));
-                    } catch (Exception e) {
-                        Toast.makeText(this, "Playback speed not supported on this device", Toast.LENGTH_SHORT).show();
-                    }
-                } else {
-                    Toast.makeText(this, "Requires Android M+ for speed control", Toast.LENGTH_SHORT).show();
+                // minSdk is >= 26 for this project, so PlaybackParams is available; handle device exceptions
+                speedIndex = (speedIndex + 1) % speeds.length;
+                float nextSpeed = speeds[speedIndex];
+                try {
+                    PlaybackParams params = mediaPlayer.getPlaybackParams();
+                    params.setSpeed(nextSpeed);
+                    mediaPlayer.setPlaybackParams(params);
+                    speedButton.setText(String.format(Locale.US, "%.2fx", nextSpeed));
+                } catch (Exception e) {
+                    Toast.makeText(this, "Playback speed not supported on this device", Toast.LENGTH_SHORT).show();
                 }
             });
+        }
+
+        // Wire library button
+        Button libraryButton = findViewById(R.id.library_button);
+        if (libraryButton != null) {
+            libraryButton.setOnClickListener(v -> checkPermissionAndOpenLibrary());
         }
     }
 
@@ -308,5 +354,339 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         releasePlayer();
+    }
+
+    // MediaItem model
+    private static class MediaItem {
+        final long id;
+        final String title;
+        final String artist;
+        final String album;
+        final long dateAdded;
+        final Uri contentUri;
+
+        MediaItem(long id, String title, String artist, String album, long dateAdded, Uri contentUri) {
+            this.id = id;
+            this.title = title;
+            this.artist = artist;
+            this.album = album;
+            this.dateAdded = dateAdded;
+            this.contentUri = contentUri;
+        }
+
+        @NonNull
+        @Override
+        public String toString() {
+            if (artist != null && !artist.isEmpty()) return title + " — " + artist;
+            return title;
+        }
+    }
+
+    // Load device media into `library` on background thread
+    private void loadLibraryFromMediaStore() {
+        new Thread(() -> {
+            List<MediaItem> tmp = new ArrayList<>();
+            Uri uri = android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI;
+            String[] projection = new String[]{
+                    android.provider.MediaStore.Audio.Media._ID,
+                    android.provider.MediaStore.Audio.Media.TITLE,
+                    android.provider.MediaStore.Audio.Media.ARTIST,
+                    android.provider.MediaStore.Audio.Media.ALBUM,
+                    android.provider.MediaStore.Audio.Media.DATE_ADDED
+            };
+            Cursor c = null;
+            try {
+                c = getContentResolver().query(uri, projection, null, null, null);
+                if (c != null) {
+                    int idCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media._ID);
+                    int titleCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.TITLE);
+                    int artistCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ARTIST);
+                    int albumCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ALBUM);
+                    int dateCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DATE_ADDED);
+                    while (c.moveToNext()) {
+                        long id = c.getLong(idCol);
+                        String title = c.getString(titleCol);
+                        String artist = c.getString(artistCol);
+                        String album = c.getString(albumCol);
+                        long dateAdded = c.getLong(dateCol);
+                        Uri contentUri = ContentUris.withAppendedId(uri, id);
+                        tmp.add(new MediaItem(id, title == null ? "Unknown" : title, artist, album, dateAdded, contentUri));
+                    }
+                }
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "Failed to load media: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+            } finally {
+                if (c != null) c.close();
+            }
+
+            // update library on UI thread
+            runOnUiThread(() -> {
+                library.clear();
+                library.addAll(tmp);
+                // default filtered view = library
+                filteredLibrary.clear();
+                filteredLibrary.addAll(library);
+            });
+        }).start();
+    }
+
+    // Open a dialog that shows library with search + sort + item actions
+    private void openLibraryDialog() {
+        View dlgView = getLayoutInflater().inflate(R.layout.dialog_media_library, null);
+        android.widget.SearchView searchView = dlgView.findViewById(R.id.dialog_search);
+        Spinner sortSpinner = dlgView.findViewById(R.id.dialog_sort_spinner);
+        ListView listView = dlgView.findViewById(R.id.dialog_list);
+        Button btnQueue = dlgView.findViewById(R.id.btn_show_queue);
+        Button btnPlaylists = dlgView.findViewById(R.id.btn_manage_playlists);
+
+        ArrayAdapter<MediaItem> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, filteredLibrary);
+        listView.setAdapter(adapter);
+
+        // Sort options
+        String[] sortOptions = new String[]{"Title", "Artist", "Recently added"};
+        ArrayAdapter<String> sa = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, sortOptions);
+        sa.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        sortSpinner.setAdapter(sa);
+
+        sortSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            final Collator collator = Collator.getInstance(Locale.getDefault());
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                Comparator<MediaItem> comp;
+                if (position == 0) comp = (a, b) -> collator.compare(a.title, b.title);
+                else if (position == 1) comp = (a, b) -> collator.compare(a.artist == null ? "" : a.artist, b.artist == null ? "" : b.artist);
+                else comp = (a, b) -> Long.compare(b.dateAdded, a.dateAdded);
+                filteredLibrary.sort(comp);
+                adapter.notifyDataSetChanged();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+
+        // Search handling
+        searchView.setOnQueryTextListener(new android.widget.SearchView.OnQueryTextListener() {
+            @Override
+            public boolean onQueryTextSubmit(String query) {
+                doFilter(query, adapter);
+                return true;
+            }
+
+            @Override
+            public boolean onQueryTextChange(String newText) {
+                if (pendingSearch != null) uiHandler.removeCallbacks(pendingSearch);
+                pendingSearch = () -> doFilter(newText, adapter);
+                uiHandler.postDelayed(pendingSearch, 200);
+                return true;
+            }
+        });
+
+        // Item click -> play
+        listView.setOnItemClickListener((parent, view, position, id) -> {
+            MediaItem item = filteredLibrary.get(position);
+            if (item != null) {
+                prepareMediaPlayer(item.contentUri);
+                if (mediaPlayer != null) mediaPlayer.start();
+                // add to queue
+                playQueue.add(item);
+                Toast.makeText(this, getString(R.string.playing_prefix) + item.title, Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        // Item long click -> actions (add to queue / add to playlist)
+        listView.setOnItemLongClickListener((parent, view, position, id) -> {
+            MediaItem item = filteredLibrary.get(position);
+            PopupMenu pm = new PopupMenu(this, view);
+            pm.getMenu().add(getString(R.string.add_to_queue));
+            pm.getMenu().add(getString(R.string.add_to_playlist));
+            pm.setOnMenuItemClickListener(menuItem -> {
+                String t = String.valueOf(menuItem.getTitle());
+                if (t.equals(getString(R.string.add_to_queue))) {
+                    playQueue.add(item);
+                    Toast.makeText(this, getString(R.string.added_to, getString(R.string.queue)), Toast.LENGTH_SHORT).show();
+                } else if (t.equals(getString(R.string.add_to_playlist))) {
+                    showAddToPlaylistDialog(item);
+                }
+                return true;
+            });
+            pm.show();
+            return true;
+        });
+
+        // show queue
+        btnQueue.setOnClickListener(v -> showQueueDialog());
+
+        // manage playlists
+        btnPlaylists.setOnClickListener(v -> showPlaylistsDialog());
+
+        // Show dialog
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.media_library_title))
+                .setView(dlgView)
+                .setPositiveButton(getString(R.string.close), null)
+                .show();
+    }
+
+    private void doFilter(String q, ArrayAdapter<MediaItem> adapter) {
+        String nq = q == null ? "" : q.trim().toLowerCase(Locale.ROOT);
+        filteredLibrary.clear();
+        if (nq.isEmpty()) filteredLibrary.addAll(library);
+        else {
+            for (MediaItem m : library) {
+                if ((m.title != null && m.title.toLowerCase(Locale.ROOT).contains(nq))
+                        || (m.artist != null && m.artist.toLowerCase(Locale.ROOT).contains(nq))
+                        || (m.album != null && m.album.toLowerCase(Locale.ROOT).contains(nq))) {
+                    filteredLibrary.add(m);
+                }
+            }
+        }
+        adapter.notifyDataSetChanged();
+    }
+
+    // Show play queue with ability to remove items
+    private void showQueueDialog() {
+        List<String> titles = new ArrayList<>();
+        for (MediaItem m : playQueue) titles.add(m.title + (m.artist != null ? " — " + m.artist : ""));
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, titles);
+        ListView lv = new ListView(this);
+        lv.setAdapter(adapter);
+        lv.setOnItemLongClickListener((parent, view, position, id) -> {
+            // remove on long press
+            playQueue.remove(position);
+            titles.remove(position);
+            adapter.notifyDataSetChanged();
+            return true;
+        });
+
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.play_queue_title))
+                .setView(lv)
+                .setPositiveButton(getString(R.string.close), null)
+                .show();
+    }
+
+    // Manage playlists (create, view)
+    private void showPlaylistsDialog() {
+        List<String> names = new ArrayList<>(playlists.keySet());
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, names);
+        ListView lv = new ListView(this);
+        lv.setAdapter(adapter);
+
+        lv.setOnItemClickListener((parent, view, position, id) -> {
+            String name = names.get(position);
+            List<MediaItem> items = playlists.get(name);
+            if (items == null) items = new ArrayList<>();
+            showPlaylistDetailDialog(name, items);
+        });
+
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.playlists))
+                .setView(lv)
+                .setPositiveButton(getString(R.string.create_playlist), (dialog, which) -> {
+                    // create new playlist
+                    EditText input = new EditText(this);
+                    new AlertDialog.Builder(this)
+                            .setTitle(getString(R.string.create_playlist_name))
+                            .setView(input)
+                            .setPositiveButton(getString(R.string.create_playlist), (d, w) -> {
+                                String name = input.getText().toString().trim();
+                                if (!name.isEmpty() && !playlists.containsKey(name)) {
+                                    playlists.put(name, new ArrayList<>());
+                                    Toast.makeText(this, getString(R.string.playlist_created), Toast.LENGTH_SHORT).show();
+                                }
+                            })
+                            .setNegativeButton(getString(R.string.close), null)
+                            .show();
+                })
+                .setNegativeButton(getString(R.string.close), null)
+                .show();
+    }
+
+    private void showPlaylistDetailDialog(String name, List<MediaItem> items) {
+        // Ensure we use a final reference for lambdas
+        final List<MediaItem> playlistItems = (items == null) ? new ArrayList<>() : items;
+        List<String> titles = new ArrayList<>();
+        for (MediaItem m : playlistItems) titles.add(m.title + (m.artist != null ? " — " + m.artist : ""));
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, titles);
+        ListView lv = new ListView(this);
+        lv.setAdapter(adapter);
+        lv.setOnItemLongClickListener((parent, view, position, id) -> {
+            // remove from playlist (operates on the final playlistItems list)
+            if (position >= 0 && position < playlistItems.size()) {
+                playlistItems.remove(position);
+                titles.remove(position);
+                adapter.notifyDataSetChanged();
+            }
+            return true;
+        });
+
+        new AlertDialog.Builder(this)
+                .setTitle(name + " (" + getString(R.string.long_press_remove) + ")")
+                .setView(lv)
+                .setPositiveButton(getString(R.string.close), null)
+                .show();
+    }
+
+    private void showAddToPlaylistDialog(MediaItem item) {
+        // show existing playlists or option to create new
+        List<String> names = new ArrayList<>(playlists.keySet());
+        names.add(0, getString(R.string.create_new_playlist_option));
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, names);
+        ListView lv = new ListView(this);
+        lv.setAdapter(adapter);
+
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.add_to_playlist))
+                .setView(lv)
+                .setNegativeButton(getString(R.string.close), null)
+                .create();
+
+        lv.setOnItemClickListener((parent, view, position, id) -> {
+            String sel = names.get(position);
+            if (position == 0) {
+                // create new
+                EditText input = new EditText(this);
+                new AlertDialog.Builder(this)
+                        .setTitle(getString(R.string.create_playlist_name))
+                        .setView(input)
+                        .setPositiveButton(getString(R.string.create_playlist), (d, w) -> {
+                            String name = input.getText().toString().trim();
+                            if (!name.isEmpty()) {
+                                playlists.putIfAbsent(name, new ArrayList<>());
+                                List<MediaItem> list = playlists.get(name);
+                                if (list != null) list.add(item);
+                                Toast.makeText(this, getString(R.string.added_to, name), Toast.LENGTH_SHORT).show();
+                            }
+                        })
+                        .setNegativeButton(getString(R.string.close), null)
+                        .show();
+            } else {
+                playlists.putIfAbsent(sel, new ArrayList<>());
+                List<MediaItem> list = playlists.get(sel);
+                if (list != null) list.add(item);
+                Toast.makeText(this, getString(R.string.added_to, sel), Toast.LENGTH_SHORT).show();
+            }
+            dlg.dismiss();
+        });
+
+        dlg.show();
+    }
+
+    private void checkPermissionAndOpenLibrary() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            String perm = android.Manifest.permission.READ_MEDIA_AUDIO;
+            if (ContextCompat.checkSelfPermission(this, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                loadLibraryFromMediaStore();
+                openLibraryDialog();
+            } else {
+                permissionLauncher.launch(new String[]{perm});
+            }
+        } else {
+            String perm = android.Manifest.permission.READ_EXTERNAL_STORAGE;
+            if (ContextCompat.checkSelfPermission(this, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                loadLibraryFromMediaStore();
+                openLibraryDialog();
+            } else {
+                permissionLauncher.launch(new String[]{perm});
+            }
+        }
     }
 }

@@ -6,7 +6,24 @@
     <string name="play_pause">Play/Pause</string>
     <string name="skip_forward">Skip forward</string>
     <string name="mute">Mute</string>
-    <string name="tap_load_audio">Tap to load audio (no bundled sample found)</string>
+    <string name="tap_load_audio">Tap to load audio</string>
     <string name="playback_speed">Playback speed</string>
     <string name="playback_speed_default">1.0x</string>
+    <string name="library">Library</string>
+    <string name="queue">Queue</string>
+    <string name="playlists">Playlists</string>
+    <string name="search_hint">Search by title, artist, album</string>
+    <string name="add_to_queue">Add to Queue</string>
+    <string name="add_to_playlist">Add to Playlist</string>
+    <string name="media_library_title">Media Library</string>
+    <string name="close">Close</string>
+    <string name="create_playlist">Create playlist</string>
+    <string name="create_playlist_name">New playlist name</string>
+    <string name="create_new_playlist_option">&lt;Create new playlist&gt;</string>
+    <string name="added_to">Added to %1$s</string>
+    <string name="playlist_created">Playlist created</string>
+    <string name="unable_to_open_picker">Unable to open picker</string>
+    <string name="playing_prefix">Playing: </string>
+    <string name="play_queue_title">Play Queue (long-press to remove)</string>
+    <string name="long_press_remove">long-press to remove</string>
 </resources>

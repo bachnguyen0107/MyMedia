@@ -195,22 +195,30 @@ public class MainActivity extends AppCompatActivity {
         // Skip forward 15s
         if (skipForwardButton != null) {
             skipForwardButton.setOnClickListener(v -> {
-                if (mediaPlayer == null) return;
-                int pos = mediaPlayer.getCurrentPosition();
-                int target = Math.min(pos + 15_000, mediaPlayer.getDuration());
-                mediaPlayer.seekTo(target);
-                if (seekBar != null) seekBar.setProgress(target);
+                if (playingFromQueue && canSkipNext()) {
+                    skipToNextInQueue();
+                } else {
+                    if (mediaPlayer == null) return;
+                    int pos = mediaPlayer.getCurrentPosition();
+                    int target = Math.min(pos + 15_000, mediaPlayer.getDuration());
+                    mediaPlayer.seekTo(target);
+                    if (seekBar != null) seekBar.setProgress(target);
+                }
             });
         }
 
-        // Skip backward 15s
+        // Skip backward 15s or previous track if in queue
         if (skipBackwardButton != null) {
             skipBackwardButton.setOnClickListener(v -> {
-                if (mediaPlayer == null) return;
-                int pos = mediaPlayer.getCurrentPosition();
-                int target = Math.max(pos - 15_000, 0);
-                mediaPlayer.seekTo(target);
-                if (seekBar != null) seekBar.setProgress(target);
+                if (playingFromQueue && canSkipPrev()) {
+                    skipToPreviousInQueue();
+                } else {
+                    if (mediaPlayer == null) return;
+                    int pos = mediaPlayer.getCurrentPosition();
+                    int target = Math.max(pos - 15_000, 0);
+                    mediaPlayer.seekTo(target);
+                    if (seekBar != null) seekBar.setProgress(target);
+                }
             });
         }
 
@@ -318,7 +326,6 @@ public class MainActivity extends AppCompatActivity {
         handler.post(updateProgress);
 
         mediaPlayer.setOnCompletionListener(mp -> {
-            // If we're playing from queue, advance automatically
             if (playingFromQueue && queueIndex >= 0 && queueIndex + 1 < playQueue.size()) {
                 queueIndex++;
                 MediaItem next = playQueue.get(queueIndex);
@@ -438,6 +445,9 @@ public class MainActivity extends AppCompatActivity {
             v.setOnClickListener(view -> {
                 MediaItem m = (MediaItem) view.getTag();
                 if (m != null) {
+                    // exit queue mode when playing a single item from library
+                    playingFromQueue = false;
+                    queueIndex = -1;
                     prepareMediaPlayer(m.contentUri);
                     if (mediaPlayer != null) mediaPlayer.start();
                     Toast.makeText(MainActivity.this, getString(R.string.playing_prefix) + m.title, Toast.LENGTH_SHORT).show();
@@ -634,6 +644,80 @@ public class MainActivity extends AppCompatActivity {
     private void showQueueDialog() {
         RemoveAdapter adapter = new RemoveAdapter(this, playQueue);
         ListView lv = new ListView(this);
+
+        // Header with previous/now playing/next and prev/next buttons
+        android.widget.LinearLayout header = new android.widget.LinearLayout(this);
+        header.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        header.setPadding(pad, pad, pad, pad);
+
+        TextView tvPrevLabel = new TextView(this);
+        tvPrevLabel.setText(getString(R.string.previous_item));
+        TextView tvPrev = new TextView(this);
+
+        TextView tvNowLabel = new TextView(this);
+        tvNowLabel.setText(getString(R.string.now_playing));
+        TextView tvNow = new TextView(this);
+
+        TextView tvNextLabel = new TextView(this);
+        tvNextLabel.setText(getString(R.string.up_next));
+        TextView tvNext = new TextView(this);
+
+        android.widget.LinearLayout navRow = new android.widget.LinearLayout(this);
+        navRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        navRow.setPadding(0, pad / 2, 0, 0);
+
+        ImageButton btnPrev = new ImageButton(this);
+        btnPrev.setImageResource(android.R.drawable.ic_media_previous);
+        btnPrev.setBackgroundResource(android.R.color.transparent);
+        btnPrev.setContentDescription(getString(R.string.previous_track));
+
+        ImageButton btnNext = new ImageButton(this);
+        btnNext.setImageResource(android.R.drawable.ic_media_next);
+        btnNext.setBackgroundResource(android.R.color.transparent);
+        btnNext.setContentDescription(getString(R.string.next_track));
+
+        navRow.addView(btnPrev);
+        navRow.addView(btnNext);
+
+        header.addView(tvPrevLabel);
+        header.addView(tvPrev);
+        header.addView(tvNowLabel);
+        header.addView(tvNow);
+        header.addView(tvNextLabel);
+        header.addView(tvNext);
+        header.addView(navRow);
+
+        // helper to update header state
+        Runnable updateHeader = () -> {
+            if (playingFromQueue && queueIndex >= 0 && queueIndex < playQueue.size()) {
+                MediaItem current = playQueue.get(queueIndex);
+                MediaItem prev = queueIndex > 0 ? playQueue.get(queueIndex - 1) : null;
+                MediaItem next = (queueIndex + 1 < playQueue.size()) ? playQueue.get(queueIndex + 1) : null;
+                tvNow.setText(displayFor(current));
+                tvPrev.setText(prev == null ? "-" : displayFor(prev));
+                tvNext.setText(next == null ? "-" : displayFor(next));
+                btnPrev.setEnabled(canSkipPrev());
+                btnNext.setEnabled(canSkipNext());
+            } else {
+                tvNow.setText(getString(R.string.not_playing_from_queue));
+                tvPrev.setText("-");
+                tvNext.setText("-");
+                btnPrev.setEnabled(false);
+                btnNext.setEnabled(false);
+            }
+        };
+
+        btnPrev.setOnClickListener(v -> {
+            skipToPreviousInQueue();
+            updateHeader.run();
+        });
+        btnNext.setOnClickListener(v -> {
+            skipToNextInQueue();
+            updateHeader.run();
+        });
+
+        lv.addHeaderView(header, null, false);
         lv.setAdapter(adapter);
 
         new AlertDialog.Builder(this)
@@ -641,6 +725,9 @@ public class MainActivity extends AppCompatActivity {
                 .setView(lv)
                 .setPositiveButton(getString(R.string.close), null)
                 .show();
+
+        // initialize header state after showing list
+        updateHeader.run();
     }
 
     // Manage playlists (create, view)
@@ -663,7 +750,7 @@ public class MainActivity extends AppCompatActivity {
                     .setTitle(selectedName)
                     .setItems(options, (dialog, which) -> {
                         if (which == 0) {
-                            // Play whole
+                            // Play whole playlist
                             List<MediaItem> items = playlists.get(selectedName);
                             if (items == null) items = new ArrayList<>();
                             startQueuePlayback(items, selectedName);
@@ -818,5 +905,38 @@ public class MainActivity extends AppCompatActivity {
         });
 
         dlg.show();
+    }
+
+    private String displayFor(@Nullable MediaItem m) {
+        if (m == null) return "";
+        return (m.artist != null && !m.artist.isEmpty()) ? (m.title + " — " + m.artist) : m.title;
+    }
+
+    private boolean canSkipNext() {
+        return playingFromQueue && queueIndex >= 0 && (queueIndex + 1) < playQueue.size();
+    }
+
+    private boolean canSkipPrev() {
+        return playingFromQueue && queueIndex > 0 && queueIndex < playQueue.size();
+    }
+
+    private void skipToNextInQueue() {
+        if (!canSkipNext()) return;
+        queueIndex++;
+        MediaItem next = playQueue.get(queueIndex);
+        prepareMediaPlayer(next.contentUri);
+        if (mediaPlayer != null) mediaPlayer.start();
+        if (titleText != null) titleText.setText(next.title);
+        if (playPauseButton != null) playPauseButton.setImageResource(android.R.drawable.ic_media_pause);
+    }
+
+    private void skipToPreviousInQueue() {
+        if (!canSkipPrev()) return;
+        queueIndex--;
+        MediaItem prev = playQueue.get(queueIndex);
+        prepareMediaPlayer(prev.contentUri);
+        if (mediaPlayer != null) mediaPlayer.start();
+        if (titleText != null) titleText.setText(prev.title);
+        if (playPauseButton != null) playPauseButton.setImageResource(android.R.drawable.ic_media_pause);
     }
 }

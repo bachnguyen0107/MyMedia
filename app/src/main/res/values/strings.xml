@@ -43,4 +43,12 @@
     <string name="play_whole_playlist">Play whole playlist</string>
     <string name="playlist_empty">Playlist is empty</string>
     <string name="playing_playlist">Playing playlist: %1$s</string>
+
+    <!-- New strings for next/previous track actions and queue dialog header labels -->
+    <string name="previous_track">Previous track</string>
+    <string name="next_track">Next track</string>
+    <string name="now_playing">Now playing</string>
+    <string name="previous_item">Previous</string>
+    <string name="up_next">Up next</string>
+    <string name="not_playing_from_queue">Not playing from queue</string>
 </resources>

@@ -25,16 +25,6 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.core.content.ContextCompat;
-
-import java.text.Collator;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
@@ -44,6 +34,20 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+
+import com.example.mymediaplayer.data.AppDatabase;
+import com.example.mymediaplayer.data.PlaylistDao;
+import com.example.mymediaplayer.data.PlaylistEntity;
+import com.example.mymediaplayer.data.PlaylistItemDao;
+import com.example.mymediaplayer.data.PlaylistItemEntity;
+import com.example.mymediaplayer.data.SessionManager;
+
+import java.text.Collator;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -61,6 +65,10 @@ public class MainActivity extends AppCompatActivity {
     private TextView currentTimeText;
     private TextView totalTimeText;
     private TextView titleText;
+
+    // Account bar
+    private TextView accountLabel;
+    private Button signOutButton;
 
     private boolean isMuted = false;
     private int previousVolume = 0;
@@ -88,7 +96,13 @@ public class MainActivity extends AppCompatActivity {
     private final List<MediaItem> library = new ArrayList<>();
     private final List<MediaItem> filteredLibrary = new ArrayList<>();
     private final List<MediaItem> playQueue = new ArrayList<>();
-    private final Map<String, List<MediaItem>> playlists = new HashMap<>();
+
+    // Persistent storage for per-user playlists
+    private AppDatabase db;
+    private PlaylistDao playlistDao;
+    private PlaylistItemDao playlistItemDao;
+    private SessionManager sessionManager;
+    private int currentUserId = -1;
 
     // Queue playback state
     private boolean playingFromQueue = false;
@@ -102,7 +116,22 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Require login
+        sessionManager = new SessionManager(this);
+        if (!sessionManager.isLoggedIn()) {
+            startActivity(new Intent(this, LoginActivity.class));
+            finish();
+            return;
+        }
+        currentUserId = sessionManager.getUserId();
+
         setContentView(R.layout.activity_main);
+
+        // init DB
+        db = AppDatabase.getInstance(this);
+        playlistDao = db.playlistDao();
+        playlistItemDao = db.playlistItemDao();
 
         // register permission launcher
         permissionLauncher = registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
@@ -135,6 +164,24 @@ public class MainActivity extends AppCompatActivity {
         currentTimeText = findViewById(R.id.current_time);
         totalTimeText = findViewById(R.id.total_time);
         titleText = findViewById(R.id.title_text);
+        accountLabel = findViewById(R.id.tv_account_label);
+        signOutButton = findViewById(R.id.btn_sign_out);
+
+        // account bar
+        if (accountLabel != null) {
+            String username = sessionManager.getUsername();
+            accountLabel.setText(getString(R.string.account_label, username));
+        }
+        if (signOutButton != null) {
+            signOutButton.setOnClickListener(v -> {
+                sessionManager.logout();
+                Toast.makeText(this, R.string.signed_out, Toast.LENGTH_SHORT).show();
+                Intent i = new Intent(this, LoginActivity.class);
+                i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                startActivity(i);
+                finish();
+            });
+        }
 
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
 
@@ -608,8 +655,6 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-
-
         // show queue
         btnQueue.setOnClickListener(v -> showQueueDialog());
 
@@ -732,14 +777,16 @@ public class MainActivity extends AppCompatActivity {
 
     // Manage playlists (create, view)
     private void showPlaylistsDialog() {
-        List<String> names = new ArrayList<>(playlists.keySet());
+        List<PlaylistEntity> pls = playlistDao.getPlaylistsForUser(currentUserId);
+        List<String> names = new ArrayList<>();
+        for (PlaylistEntity p : pls) names.add(p.name);
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, names);
         ListView lv = new ListView(this);
         lv.setAdapter(adapter);
 
         // actions: Play, Open, Rename, Delete
         lv.setOnItemClickListener((parent, view, position, id) -> {
-            String selectedName = names.get(position);
+            PlaylistEntity selected = pls.get(position);
             String[] options = new String[]{
                     getString(R.string.play_whole_playlist),
                     getString(R.string.open),
@@ -747,47 +794,46 @@ public class MainActivity extends AppCompatActivity {
                     getString(R.string.delete_playlist)
             };
             new AlertDialog.Builder(this)
-                    .setTitle(selectedName)
+                    .setTitle(selected.name)
                     .setItems(options, (dialog, which) -> {
                         if (which == 0) {
-                            // Play whole playlist
-                            List<MediaItem> items = playlists.get(selectedName);
-                            if (items == null) items = new ArrayList<>();
-                            startQueuePlayback(items, selectedName);
+                            List<PlaylistItemEntity> items = playlistItemDao.getItemsForPlaylist(selected.id);
+                            startQueuePlayback(toMediaItems(items), selected.name);
                         } else if (which == 1) {
-                            // Open
-                            List<MediaItem> items = playlists.get(selectedName);
-                            if (items == null) items = new ArrayList<>();
-                            showPlaylistDetailDialog(selectedName, items);
+                            showPlaylistDetailDialog(selected);
                         } else if (which == 2) {
-                            // Rename
                             final EditText input = new EditText(this);
-                            input.setText(selectedName);
+                            input.setText(selected.name);
                             new AlertDialog.Builder(this)
                                     .setTitle(getString(R.string.rename_playlist))
                                     .setView(input)
                                     .setPositiveButton(getString(R.string.rename), (d, w) -> {
                                         String newName = input.getText().toString().trim();
                                         if (newName.isEmpty()) return;
-                                        if (playlists.containsKey(newName)) {
-                                            Toast.makeText(this, getString(R.string.playlist_exists), Toast.LENGTH_SHORT).show();
-                                            return;
+                                        // check unique
+                                        for (PlaylistEntity p : pls) {
+                                            if (p != selected && p.name.equalsIgnoreCase(newName)) {
+                                                Toast.makeText(this, getString(R.string.playlist_exists), Toast.LENGTH_SHORT).show();
+                                                return;
+                                            }
                                         }
-                                        List<MediaItem> moved = playlists.remove(selectedName);
-                                        playlists.put(newName, moved == null ? new ArrayList<>() : moved);
-                                        names.set(position, newName);
-                                        adapter.notifyDataSetChanged();
-                                        Toast.makeText(this, getString(R.string.playlist_renamed), Toast.LENGTH_SHORT).show();
+                                        selected.name = newName;
+                                        int updated = playlistDao.update(selected);
+                                        if (updated > 0) {
+                                            names.set(position, newName);
+                                            adapter.notifyDataSetChanged();
+                                            Toast.makeText(this, getString(R.string.playlist_renamed), Toast.LENGTH_SHORT).show();
+                                        }
                                     })
                                     .setNegativeButton(getString(R.string.cancel), null)
                                     .show();
                         } else if (which == 3) {
-                            // Delete
                             new AlertDialog.Builder(this)
                                     .setTitle(getString(R.string.delete_playlist))
-                                    .setMessage(getString(R.string.confirm_delete_playlist, selectedName))
+                                    .setMessage(getString(R.string.confirm_delete_playlist, selected.name))
                                     .setPositiveButton(getString(R.string.delete), (d, w) -> {
-                                        playlists.remove(selectedName);
+                                        playlistDao.delete(selected);
+                                        pls.remove(position);
                                         names.remove(position);
                                         adapter.notifyDataSetChanged();
                                         Toast.makeText(this, getString(R.string.playlist_deleted), Toast.LENGTH_SHORT).show();
@@ -810,15 +856,19 @@ public class MainActivity extends AppCompatActivity {
                             .setView(input)
                             .setPositiveButton(getString(R.string.create_playlist), (d, w) -> {
                                 String name = input.getText().toString().trim();
-                                if (!name.isEmpty() && !playlists.containsKey(name)) {
-                                    playlists.put(name, new ArrayList<>());
-                                    // update list immediately
-                                    names.add(name);
-                                    adapter.notifyDataSetChanged();
-                                    Toast.makeText(this, getString(R.string.playlist_created), Toast.LENGTH_SHORT).show();
-                                } else if (playlists.containsKey(name)) {
-                                    Toast.makeText(this, getString(R.string.playlist_exists), Toast.LENGTH_SHORT).show();
+                                if (name.isEmpty()) return;
+                                for (PlaylistEntity p : pls) {
+                                    if (p.name.equalsIgnoreCase(name)) {
+                                        Toast.makeText(this, getString(R.string.playlist_exists), Toast.LENGTH_SHORT).show();
+                                        return;
+                                    }
                                 }
+                                PlaylistEntity created = new PlaylistEntity(currentUserId, name, System.currentTimeMillis());
+                                created.id = (int) playlistDao.insert(created);
+                                pls.add(created);
+                                names.add(name);
+                                adapter.notifyDataSetChanged();
+                                Toast.makeText(this, getString(R.string.playlist_created), Toast.LENGTH_SHORT).show();
                             })
                             .setNegativeButton(getString(R.string.close), null)
                             .show();
@@ -826,7 +876,6 @@ public class MainActivity extends AppCompatActivity {
                 .setNegativeButton(getString(R.string.close), null)
                 .show();
     }
-
     private void showPlaylistDetailDialog(String name, List<MediaItem> items) {
         final List<MediaItem> playlistItems = (items == null) ? new ArrayList<>() : items;
         RemoveAdapter adapter = new RemoveAdapter(this, playlistItems);
@@ -841,11 +890,80 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    // open playlist details by entity, loading from DB and persisting removals
+    private void showPlaylistDetailDialog(@NonNull PlaylistEntity playlist) {
+        // Load items for this playlist
+        List<PlaylistItemEntity> rawItems = playlistItemDao.getItemsForPlaylist(playlist.id);
+        class PlaylistDetailAdapter extends ArrayAdapter<PlaylistItemEntity> {
+            private final List<PlaylistItemEntity> items;
+            PlaylistDetailAdapter(@NonNull android.content.Context ctx, @NonNull List<PlaylistItemEntity> items) {
+                super(ctx, 0, items);
+                this.items = items;
+            }
+            @NonNull
+            @Override
+            public View getView(int position, @Nullable View convertView, @NonNull android.view.ViewGroup parent) {
+                View v = convertView;
+                if (v == null) v = getLayoutInflater().inflate(R.layout.item_with_remove, parent, false);
+                PlaylistItemEntity pie = getItem(position);
+                TextView title = v.findViewById(R.id.item_title);
+                ImageButton btnRemove = v.findViewById(R.id.btn_remove);
+
+                String display = (pie == null) ? "" : (pie.artist != null && !pie.artist.isEmpty() ? pie.title + " — " + pie.artist : pie.title);
+                title.setText(display);
+
+                // Play item on row click
+                v.setOnClickListener(row -> {
+                    if (pie == null) return;
+                    playingFromQueue = false;
+                    queueIndex = -1;
+                    try {
+                        prepareMediaPlayer(Uri.parse(pie.contentUri));
+                        if (mediaPlayer != null) mediaPlayer.start();
+                        if (titleText != null) titleText.setText(pie.title);
+                    } catch (Exception ignored) {}
+                });
+
+                // Remove item
+                btnRemove.setOnClickListener(click -> {
+                    if (pie == null) return;
+                    int deleted = playlistItemDao.delete(pie);
+                    if (deleted > 0) {
+                        items.remove(position);
+                        notifyDataSetChanged();
+                        Toast.makeText(MainActivity.this, R.string.delete, Toast.LENGTH_SHORT).show();
+                    }
+                });
+
+                return v;
+            }
+        }
+
+        PlaylistDetailAdapter adapter = new PlaylistDetailAdapter(this, new ArrayList<>(rawItems));
+        ListView lv = new ListView(this);
+        lv.setAdapter(adapter);
+
+        new AlertDialog.Builder(this)
+                .setTitle(playlist.name)
+                .setView(lv)
+                .setNeutralButton(getString(R.string.play_whole_playlist), (d, w) -> {
+                    List<PlaylistItemEntity> current = new ArrayList<>();
+                    for (int i = 0; i < adapter.getCount(); i++) {
+                        PlaylistItemEntity it = adapter.getItem(i);
+                        if (it != null) current.add(it);
+                    }
+                    List<MediaItem> list = toMediaItems(current);
+                    startQueuePlayback(list, playlist.name);
+                })
+                .setPositiveButton(getString(R.string.close), null)
+                .show();
+    }
+
     // Ask for READ permission if needed
     private void checkPermissionAndOpenLibrary() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             String perm = android.Manifest.permission.READ_MEDIA_AUDIO;
-            if (ContextCompat.checkSelfPermission(this, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(this, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 loadLibraryFromMediaStore();
                 openLibraryDialog();
             } else {
@@ -853,7 +971,7 @@ public class MainActivity extends AppCompatActivity {
             }
         } else {
             String perm = android.Manifest.permission.READ_EXTERNAL_STORAGE;
-            if (ContextCompat.checkSelfPermission(this, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(this, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 loadLibraryFromMediaStore();
                 openLibraryDialog();
             } else {
@@ -862,10 +980,12 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // Let user pick an existing playlist or create one, then add the item
+    // Let user pick an existing playlist or create one, then add the item (persist)
     private void showAddToPlaylistDialog(MediaItem item) {
-        List<String> names = new ArrayList<>(playlists.keySet());
-        names.add(0, getString(R.string.create_new_playlist_option));
+        List<PlaylistEntity> pls = playlistDao.getPlaylistsForUser(currentUserId);
+        List<String> names = new ArrayList<>();
+        names.add(getString(R.string.create_new_playlist_option));
+        for (PlaylistEntity p : pls) names.add(p.name);
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, names);
         ListView lv = new ListView(this);
         lv.setAdapter(adapter);
@@ -886,25 +1006,42 @@ public class MainActivity extends AppCompatActivity {
                         .setPositiveButton(getString(R.string.create_playlist), (d, w) -> {
                             String name = input.getText().toString().trim();
                             if (!name.isEmpty()) {
-                                playlists.putIfAbsent(name, new ArrayList<>());
-                                List<MediaItem> list = playlists.get(name);
-                                if (list != null) list.add(item);
+                                // check duplicate
+                                for (PlaylistEntity p : pls) {
+                                    if (p.name.equalsIgnoreCase(name)) {
+                                        Toast.makeText(this, getString(R.string.playlist_exists), Toast.LENGTH_SHORT).show();
+                                        return;
+                                    }
+                                }
+                                PlaylistEntity created = new PlaylistEntity(currentUserId, name, System.currentTimeMillis());
+                                created.id = (int) playlistDao.insert(created);
+                                insertPlaylistItem(created.id, item);
                                 Toast.makeText(this, getString(R.string.added_to, name), Toast.LENGTH_SHORT).show();
                             }
                         })
                         .setNegativeButton(getString(R.string.close), null)
                         .show();
             } else {
-                String sel = names.get(position);
-                playlists.putIfAbsent(sel, new ArrayList<>());
-                List<MediaItem> list = playlists.get(sel);
-                if (list != null) list.add(item);
-                Toast.makeText(this, getString(R.string.added_to, sel), Toast.LENGTH_SHORT).show();
+                PlaylistEntity sel = pls.get(position - 1);
+                insertPlaylistItem(sel.id, item);
+                Toast.makeText(this, getString(R.string.added_to, sel.name), Toast.LENGTH_SHORT).show();
             }
             dlg.dismiss();
         });
 
         dlg.show();
+    }
+
+    private void insertPlaylistItem(int playlistId, MediaItem item) {
+        PlaylistItemEntity pie = new PlaylistItemEntity(
+                playlistId,
+                item.contentUri.toString(),
+                item.title == null ? "Unknown" : item.title,
+                item.artist,
+                item.album,
+                System.currentTimeMillis()
+        );
+        playlistItemDao.insert(pie);
     }
 
     private String displayFor(@Nullable MediaItem m) {
@@ -938,5 +1075,15 @@ public class MainActivity extends AppCompatActivity {
         if (mediaPlayer != null) mediaPlayer.start();
         if (titleText != null) titleText.setText(prev.title);
         if (playPauseButton != null) playPauseButton.setImageResource(android.R.drawable.ic_media_pause);
+    }
+
+    private List<MediaItem> toMediaItems(List<PlaylistItemEntity> items) {
+        List<MediaItem> list = new ArrayList<>();
+        long idx = 0;
+        for (PlaylistItemEntity e : items) {
+            Uri uri = Uri.parse(e.contentUri);
+            list.add(new MediaItem(idx++, e.title, e.artist, e.album, e.dateAdded, uri));
+        }
+        return list;
     }
 }

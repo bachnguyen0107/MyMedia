@@ -433,6 +433,17 @@ public class MainActivity extends AppCompatActivity {
 
             title.setText(item == null ? "" : item.title + (item.artist != null && !item.artist.isEmpty() ? " — " + item.artist : ""));
 
+            // Tag the view with the current item for reliable retrieval on click
+            v.setTag(item);
+            v.setOnClickListener(view -> {
+                MediaItem m = (MediaItem) view.getTag();
+                if (m != null) {
+                    prepareMediaPlayer(m.contentUri);
+                    if (mediaPlayer != null) mediaPlayer.start();
+                    Toast.makeText(MainActivity.this, getString(R.string.playing_prefix) + m.title, Toast.LENGTH_SHORT).show();
+                }
+            });
+
             btnAdd.setOnClickListener(view -> {
                 if (item == null) return;
                 PopupMenu popup = new PopupMenu(MainActivity.this, view);
@@ -587,15 +598,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // Item click -> play
-        listView.setOnItemClickListener((parent, view, position, id) -> {
-            MediaItem item = filteredLibrary.get(position);
-            if (item != null) {
-                prepareMediaPlayer(item.contentUri);
-                if (mediaPlayer != null) mediaPlayer.start();
-                Toast.makeText(this, getString(R.string.playing_prefix) + item.title, Toast.LENGTH_SHORT).show();
-            }
-        });
+
 
         // show queue
         btnQueue.setOnClickListener(v -> showQueueDialog());
@@ -743,19 +746,6 @@ public class MainActivity extends AppCompatActivity {
         ListView lv = new ListView(this);
         lv.setAdapter(adapter);
 
-        //  Play track on item click
-        lv.setOnItemClickListener((parent, view, position, id) -> {
-            if (position >= 0 && position < playlistItems.size()) {
-                MediaItem m = playlistItems.get(position);
-                if (m != null) {
-                    playingFromQueue = false;
-                    queueIndex = -1;
-                    prepareMediaPlayer(m.contentUri);
-                    if (mediaPlayer != null) mediaPlayer.start();
-                    Toast.makeText(this, getString(R.string.playing_prefix) + m.title, Toast.LENGTH_SHORT).show();
-                }
-            }
-        });
 
         new AlertDialog.Builder(this)
                 .setTitle(name)

@@ -396,20 +396,28 @@ public class MainActivity extends AppCompatActivity {
             }
             MediaItem item = getItem(position);
             TextView title = v.findViewById(R.id.item_title);
-            android.widget.ImageButton btnAddQueue = v.findViewById(R.id.btn_add_queue);
-            android.widget.ImageButton btnAddPlaylist = v.findViewById(R.id.btn_add_playlist);
+            android.widget.ImageButton btnAdd = v.findViewById(R.id.btn_add);
 
             title.setText(item == null ? "" : item.title + (item.artist != null && !item.artist.isEmpty() ? " — " + item.artist : ""));
 
-            btnAddQueue.setOnClickListener(view -> {
-                if (item != null) {
-                    playQueue.add(item);
-                    Toast.makeText(MainActivity.this, getString(R.string.added_to, getString(R.string.queue)), Toast.LENGTH_SHORT).show();
-                }
-            });
-
-            btnAddPlaylist.setOnClickListener(view -> {
-                if (item != null) showAddToPlaylistDialog(item);
+            btnAdd.setOnClickListener(view -> {
+                if (item == null) return;
+                PopupMenu popup = new PopupMenu(MainActivity.this, view);
+                popup.getMenu().add(0, 1, 0, getString(R.string.add_to_queue));
+                popup.getMenu().add(0, 2, 1, getString(R.string.add_to_playlist));
+                popup.setOnMenuItemClickListener(menuItem -> {
+                    int id = menuItem.getItemId();
+                    if (id == 1) {
+                        playQueue.add(item);
+                        Toast.makeText(MainActivity.this, getString(R.string.added_to, getString(R.string.queue)), Toast.LENGTH_SHORT).show();
+                        return true;
+                    } else if (id == 2) {
+                        showAddToPlaylistDialog(item);
+                        return true;
+                    }
+                    return false;
+                });
+                popup.show();
             });
 
             return v;
